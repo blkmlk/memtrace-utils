@@ -11,8 +11,8 @@ use thiserror::Error;
 pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
-    #[error("Invalid format")]
-    InvalidFormat,
+    #[error("Invalid format: line: {0}; msg: {1}")]
+    InvalidFormat(usize, &'static str),
     #[error("Internal {0}")]
     Internal(String),
 }
@@ -131,14 +131,14 @@ impl Parser {
         let file = OpenOptions::new().read(true).open(file_path)?;
         let reader = io::BufReader::new(file);
 
-        for line in reader.lines() {
-            self.parse_line(&line?)?
+        for (n, line) in reader.lines().enumerate() {
+            self.parse_line(&line?).map_err(|e| Error::InvalidFormat(n+1, e))?;
         }
 
         Ok(self.data)
     }
 
-    fn parse_line(&mut self, line: &str) -> Result<(), Error> {
+    fn parse_line(&mut self, line: &str) -> Result<(), &'static str> {
         let mut split = line.split_whitespace();
 
         let Some(first) = split.next() else {
@@ -147,30 +147,30 @@ impl Parser {
 
         match first {
             "s" => {
-                let str_len = usize::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                    .map_err(|_| Error::InvalidFormat)?;
+                let str_len = usize::from_str_radix(split.next().ok_or("failed to find str_len")?, 16)
+                    .map_err(|_| "failed to parse str_len")?;
                 self.data
                     .strings
                     .push(line[line.len() - str_len..].to_string());
             }
             "t" => {
-                let ip_idx = u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                    .map_err(|_| Error::InvalidFormat)?;
-                let parent_idx = u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                    .map_err(|_| Error::InvalidFormat)?;
+                let ip_idx = u64::from_str_radix(split.next().ok_or("failed to find ip_idx")?, 16)
+                    .map_err(|_| "failed to parse ip_idx")?;
+                let parent_idx = u64::from_str_radix(split.next().ok_or("failed to find parent_idx")?, 16)
+                    .map_err(|_| "failed to parse parent_idx")?;
 
                 self.data.traces.push(Trace { ip_idx, parent_idx })
             }
             "i" => {
-                let ip = u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                    .map_err(|_| Error::InvalidFormat)?;
+                let ip = u64::from_str_radix(split.next().ok_or("failed to find ip")?, 16)
+                    .map_err(|_| "failed to parse ip")?;
                 let module_idx =
-                    usize::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                        .map_err(|_| Error::InvalidFormat)?;
+                    usize::from_str_radix(split.next().ok_or("failed to find module_idx")?, 16)
+                        .map_err(|_| "failed to parse module_idx")?;
 
-                let frame = Self::parse_frame(&mut split)?.ok_or(Error::InvalidFormat)?;
+                let frame = Self::parse_frame(&mut split)?.ok_or("failed to find frame")?;
+
                 let mut inlined = Vec::new();
-
                 while let Some(frame) = Self::parse_frame(&mut split)? {
                     inlined.push(frame);
                 }
@@ -183,10 +183,10 @@ impl Parser {
                 })
             }
             "a" => {
-                let size = u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                    .map_err(|_| Error::InvalidFormat)?;
-                let trace_idx = u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                    .map_err(|_| Error::InvalidFormat)?;
+                let size = u64::from_str_radix(split.next().ok_or("failed to find size")?, 16)
+                    .map_err(|_| "failed to parse size")?;
+                let trace_idx = u64::from_str_radix(split.next().ok_or("failed to find trace_idx")?, 16)
+                    .map_err(|_| "failed to parse trace_idx")?;
 
                 let allocation_idx = self.add_allocation(trace_idx);
                 self.data
@@ -195,8 +195,8 @@ impl Parser {
             }
             "+" => {
                 let allocation_info_idx =
-                    u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                        .map_err(|_| Error::InvalidFormat)?;
+                    u64::from_str_radix(split.next().ok_or("failed to find allocation_info_idx")?, 16)
+                        .map_err(|_| "failed to parse allocation_info_idx")?;
 
                 let info = &mut self.data.allocation_infos[allocation_info_idx as usize];
 
@@ -204,7 +204,7 @@ impl Parser {
                     .data
                     .allocations
                     .get_mut(info.allocation_idx as usize)
-                    .ok_or_else(|| Error::Internal("allocation not found".into()))?;
+                    .ok_or_else(|| "allocation not found")?;
 
                 self.last_ptr = info.allocation_idx;
 
@@ -223,8 +223,8 @@ impl Parser {
             }
             "-" => {
                 let allocation_info_idx =
-                    u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                        .map_err(|_| Error::InvalidFormat)?;
+                    u64::from_str_radix(split.next().ok_or("failed to find allocation_info_idx")?, 16)
+                        .map_err(|_| "failed to parse allocation_info_idx")?;
 
                 let info = &mut self.data.allocation_infos[allocation_info_idx as usize];
 
@@ -232,7 +232,7 @@ impl Parser {
                     .data
                     .allocations
                     .get_mut(info.allocation_idx as usize)
-                    .ok_or_else(|| Error::Internal("allocation not found".into()))?;
+                    .ok_or_else(|| "allocation not found")?;
 
                 self.data.total.leaked -= info.size;
 
@@ -249,24 +249,24 @@ impl Parser {
                 }
             }
             "c" => {
-                let timestamp = u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                    .map_err(|_| Error::InvalidFormat)?;
+                let timestamp = u64::from_str_radix(split.next().ok_or("failed to find timestamp")?, 16)
+                    .map_err(|_| "failed to parse timestamp")?;
                 self.data.duration = Duration::from_millis(timestamp);
             }
             "R" => {
-                let rss = u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                    .map_err(|_| Error::InvalidFormat)?;
+                let rss = u64::from_str_radix(split.next().ok_or("failed to find rss")?, 16)
+                    .map_err(|_| "failed to parse rss")?;
                 if rss > self.data.peak_rss {
                     self.data.peak_rss = rss;
                 }
             }
             "I" => {
                 self.data.page_size =
-                    u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                        .map_err(|_| Error::InvalidFormat)?;
+                    u64::from_str_radix(split.next().ok_or("failed to find page_size")?, 16)
+                        .map_err(|_| "failed to parse page_size")?;
                 self.data.pages =
-                    u64::from_str_radix(split.next().ok_or(Error::InvalidFormat)?, 16)
-                        .map_err(|_| Error::InvalidFormat)?;
+                    u64::from_str_radix(split.next().ok_or("failed to find pages")?, 16)
+                        .map_err(|_| "failed to parse pages")?;
             }
             "#" => {
                 // comment
@@ -289,20 +289,20 @@ impl Parser {
         }
     }
 
-    fn parse_frame<'a>(mut iter: impl Iterator<Item = &'a str>) -> Result<Option<Frame>, Error> {
+    fn parse_frame<'a>(mut iter: impl Iterator<Item = &'a str>) -> Result<Option<Frame>, &'static str> {
         let Some(first) = iter.next() else {
             return Ok(None);
         };
 
-        let function_idx = usize::from_str_radix(first, 16).map_err(|_| Error::InvalidFormat)?;
+        let function_idx = usize::from_str_radix(first, 16).map_err(|_| "failed to parse function_idx")?;
 
         let Some(file_val) = iter.next() else {
             return Ok(Some(Frame::Single { function_idx }));
         };
 
-        let file_idx = usize::from_str_radix(file_val, 16).map_err(|_| Error::InvalidFormat)?;
-        let line_number = u32::from_str_radix(iter.next().ok_or(Error::InvalidFormat)?, 16)
-            .map_err(|_| Error::InvalidFormat)?;
+        let file_idx = usize::from_str_radix(file_val, 16).map_err(|_| "failed to parse file_idx")?;
+        let line_number = u32::from_str_radix(iter.next().ok_or("failed to find line number")?, 16)
+            .map_err(|_| "failed to parse line_number")?;
 
         Ok(Some(Frame::Multiple {
             function_idx,
