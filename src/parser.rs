@@ -27,7 +27,7 @@ pub struct Trace {
 pub struct InstructionPointer {
     pub ip: u64,
     pub module_idx: usize,
-    pub frame: Frame,
+    pub frame: Option<Frame>,
     pub inlined: Vec<Frame>,
 }
 
@@ -168,7 +168,7 @@ impl Parser {
                     usize::from_str_radix(split.next().ok_or("failed to find module_idx")?, 16)
                         .map_err(|_| "failed to parse module_idx")?;
 
-                let frame = Self::parse_frame(&mut split)?.ok_or("failed to find frame")?;
+                let frame = Self::parse_frame(&mut split)?;
 
                 let mut inlined = Vec::new();
                 while let Some(frame) = Self::parse_frame(&mut split)? {
