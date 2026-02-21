@@ -3,7 +3,7 @@ use crate::pipe_io::{PipeReader, Record};
 use nix::sys::stat::Mode;
 use nix::unistd::mkfifo;
 use std::ffi::OsStr;
-use std::fs::{remove_file, OpenOptions};
+use std::fs::{OpenOptions, remove_file};
 use std::io;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus};
@@ -36,7 +36,10 @@ where
 
     let envs = [
         ("PIPE_FILEPATH", pipe_file_path.as_str()),
+        #[cfg(target_os = "macos")]
         ("DYLD_INSERT_LIBRARIES", lib_path),
+        #[cfg(target_os = "linux")]
+        ("LD_PRELOAD", lib_path),
     ];
 
     let mut cmd = Command::new(program);
@@ -88,7 +91,7 @@ impl ExecResult {
                             Some(reader.read_record()?.map_err(Error::from))
                         }
                         Err(e) => Some(Err(e.into())),
-                    }
+                    };
                 }
             }
         }
