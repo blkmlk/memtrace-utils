@@ -126,6 +126,7 @@ impl Resolver {
         let module = self.modules.get(&ip)?;
         let loader = self.loaders.get(&module.start_address)?;
 
+        let ip = ip - module.start_address;
         let locations = module.lookup(ip, loader)?;
 
         self.cached.insert(ip, locations.clone());
